@@ -369,6 +369,25 @@ async function cargarPartidos(){
   }catch(e){ PARTIDOS = PARTIDOS_FALLBACK; }
 }
 
+// Aplica los marcadores reales ingresados manualmente por Combuses (tabla 'resultados')
+async function aplicarResultadosManuales(){
+  try{
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/resultados?select=partido_id,goles_local,goles_visitante,finalizado`, { headers:sbHeaders });
+    if(!r.ok) return;
+    const rows = await r.json();
+    rows.forEach(row=>{
+      if(row.finalizado && row.goles_local!=null && row.goles_visitante!=null){
+        const p = PARTIDOS.find(x=>x.id===row.partido_id);
+        if(p){
+          p.glReal = row.goles_local; p.gvReal = row.goles_visitante;
+          p.ganadorReal = p.glReal>p.gvReal ? "local" : (p.gvReal>p.glReal ? "visitante" : "empate");
+          p.terminado = true;
+        }
+      }
+    });
+  }catch(e){ /* si falla, se mantienen los datos de openfootball */ }
+}
+
 /* ===================== PANTALLAS / TABS ===================== */
 function mostrar(id){
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
@@ -633,6 +652,7 @@ async function renderResultados(force){
   cont.innerHTML = `<div class="loader"><div class="spinner"></div>Cargando resultados...</div>`;
   try{
     await cargarPartidos();
+    await aplicarResultadosManuales();   // marcadores ingresados por Combuses (prioridad)
     const preds = await asegurarDatos(force);
     let html = "";
     PARTIDOS.forEach(p=>{
