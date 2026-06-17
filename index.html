@@ -496,13 +496,17 @@ async function buscarPersona(cedula){
   const iC=H.indexOf("CEDULA"), iN=H.indexOf("NOMBRE COMPLETO"), iE=H.indexOf("ESTADO");
   if(iC===-1||iN===-1) throw new Error("La lista no tiene las columnas esperadas.");
   const obj = cedula.trim();
+  let primero=null, activa=null;
   for(let r=1;r<filas.length;r++){
     if((filas[r][iC]||"").trim()===obj){
       const est = iE!==-1 ? (filas[r][iE]||"").trim().toUpperCase() : "ACTIVO";
-      return { cedula:obj, nombre:(filas[r][iN]||"").trim(), activo: est==="ACTIVO" };
+      const reg = { cedula:obj, nombre:(filas[r][iN]||"").trim(), activo: est==="ACTIVO" };
+      if(!primero) primero = reg;          // primer registro hallado (respaldo del nombre)
+      if(reg.activo && !activa) activa = reg; // guardar el registro ACTIVO si existe alguno
     }
   }
-  return null;
+  if(!primero) return null;                 // la cédula no está en la lista
+  return activa || primero;                 // si tiene algún registro activo, ese gana; si no, queda inactiva
 }
 
 /* ===================== SUPABASE ===================== */
