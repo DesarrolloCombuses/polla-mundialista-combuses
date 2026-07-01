@@ -364,6 +364,25 @@ const PARTIDOS_FALLBACK = [
   { id:6, localEs:"RD Congo",   localIso:"cd", visEs:"Uzbekistán", visIso:"uz", esCol:false, fecha:"sáb 27 jun · 6:30 p. m.",  kickoff:Date.UTC(2026,5,27,23,30), terminado:false },
 ];
 
+// Eliminatorias: id fijo por ronda (Colombia juega máx. 1 partido por ronda → id estable para Supabase).
+// Grupos = 1..6. 16avos=7, octavos=8, cuartos=9, semifinal=10, 3er puesto=11, final=12.
+const RONDA_ID = {
+  "Round of 32":7,
+  "Round of 16":8,
+  "Quarter-final":9, "Quarter-finals":9, "Quarterfinal":9,
+  "Semi-final":10, "Semi-finals":10, "Semifinal":10,
+  "Match for third place":11, "Third place":11, "Play-off for third place":11, "Third-place match":11,
+  "Final":12,
+};
+const RONDA_ES = {
+  "Round of 32":"Dieciseisavos de final",
+  "Round of 16":"Octavos de final",
+  "Quarter-final":"Cuartos de final", "Quarter-finals":"Cuartos de final", "Quarterfinal":"Cuartos de final",
+  "Semi-final":"Semifinal", "Semi-finals":"Semifinal", "Semifinal":"Semifinal",
+  "Match for third place":"Tercer puesto", "Third place":"Tercer puesto", "Play-off for third place":"Tercer puesto", "Third-place match":"Tercer puesto",
+  "Final":"Final",
+};
+
 /* ===================== ESTADO ===================== */
 let jugador = null;
 let PARTIDOS = [];
@@ -411,27 +430,40 @@ function kickoffMs(date, time){
   return Date.UTC(Y,Mo-1,D,hh,mm) - off*3600*1000;
 }
 
+function construirPartido(m, id, rondaEs){
+  const i1 = PAISES[m.team1] || {es:m.team1, iso:"un"};
+  const i2 = PAISES[m.team2] || {es:m.team2, iso:"un"};
+  const p = { id, localEs:i1.es, localIso:i1.iso, visEs:i2.es, visIso:i2.iso,
+    esCol:(m.team1==="Colombia"||m.team2==="Colombia"), fecha:fechaColombia(m.date,m.time),
+    kickoff:kickoffMs(m.date,m.time), terminado:false, ronda:rondaEs||null };
+  if(m.score && m.score.ft){
+    p.glReal = m.score.ft[0]; p.gvReal = m.score.ft[1];
+    p.ganadorReal = p.glReal>p.gvReal ? "local" : (p.gvReal>p.glReal ? "visitante" : "empate");
+    p.terminado = true;
+  }
+  return p;
+}
+
 async function cargarPartidos(){
   try{
     const r = await fetch(OPENFOOTBALL_URL);
     if(!r.ok) throw new Error();
     const data = await r.json();
-    let ms = (data.matches||[]).filter(m => m.group===GRUPO);
-    ms.sort((a,b)=> (a.date+(a.time||"")).localeCompare(b.date+(b.time||"")));
-    if(!ms.length) throw new Error();
-    PARTIDOS = ms.map((m,i)=>{
-      const i1 = PAISES[m.team1] || {es:m.team1, iso:"un"};
-      const i2 = PAISES[m.team2] || {es:m.team2, iso:"un"};
-      const p = { id:i+1, localEs:i1.es, localIso:i1.iso, visEs:i2.es, visIso:i2.iso,
-        esCol:(m.team1==="Colombia"||m.team2==="Colombia"), fecha:fechaColombia(m.date,m.time),
-        kickoff:kickoffMs(m.date,m.time), terminado:false };
-      if(m.score && m.score.ft){
-        p.glReal = m.score.ft[0]; p.gvReal = m.score.ft[1];
-        p.ganadorReal = p.glReal>p.gvReal ? "local" : (p.gvReal>p.glReal ? "visitante" : "empate");
-        p.terminado = true;
-      }
-      return p;
-    });
+    const matches = data.matches || [];
+
+    // Fase de grupos: los 6 partidos del Grupo K → ids 1..6 (no cambia)
+    let grupo = matches.filter(m => m.group===GRUPO);
+    grupo.sort((a,b)=> (a.date+(a.time||"")).localeCompare(b.date+(b.time||"")));
+    if(!grupo.length) throw new Error();
+    const deGrupo = grupo.map((m,i)=> construirPartido(m, i+1));
+
+    // Eliminatorias: SOLO partidos donde Colombia ya esté confirmada (país real, no "W80" ni placeholders).
+    // Aparecen automáticamente cuando la API define el cruce; si eliminan a Colombia, dejan de aparecer.
+    let elim = matches.filter(m => !m.group && (m.team1==="Colombia" || m.team2==="Colombia"));
+    elim.sort((a,b)=> (a.date+(a.time||"")).localeCompare(b.date+(b.time||"")));
+    const deElim = elim.map(m => construirPartido(m, RONDA_ID[m.round] || m.num, RONDA_ES[m.round] || m.round));
+
+    PARTIDOS = deGrupo.concat(deElim);
   }catch(e){ PARTIDOS = PARTIDOS_FALLBACK; }
 }
 
@@ -560,9 +592,10 @@ function renderVotacion(){
   const cont=document.getElementById("partidos-container"); cont.innerHTML="";
   let faltan=0; const abiertosSinVotar=[];
   PARTIDOS.forEach(p=>{
-    const v=votados[p.partido_id]; const abierto=partidoAbierto(p);
+    const v=votados[p.id]; const abierto=partidoAbierto(p);
     const div=document.createElement("div"); div.className="partido"+(p.esCol?" col":"");
-    let h=`<span class="chip-fecha">📅 ${p.fecha}</span>
+    let h=`${p.ronda?`<span class="chip-col">🏆 ${p.ronda}</span>`:''}
+      <span class="chip-fecha">📅 ${p.fecha}</span>
       ${p.esCol?'<span class="chip-col">🇨🇴 ¡Juega Colombia!</span>':''}
       <div class="equipos">
         <div class="equipo"><img class="flag" src="${flagURL(p.localIso,160)}" alt="${p.localEs}"><div class="nombre">${p.localEs}</div></div>
@@ -724,7 +757,7 @@ async function renderStats(force){
       const lista=Object.values(porCedula).sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
       html += `<div class="stat-card"><div class="stat-head">👥 Participantes (${lista.length})</div>`;
       lista.forEach(x=>{
-        html += `<div class="rank-item"><div class="rank-nombre"><div class="rk-name">${(x.nombre||'').toLowerCase()}</div></div><div class="rank-pts"><small>${x.n}/6 votos</small></div></div>`;
+        html += `<div class="rank-item"><div class="rank-nombre"><div class="rk-name">${(x.nombre||'').toLowerCase()}</div></div><div class="rank-pts"><small>${x.n}/${PARTIDOS.length} votos</small></div></div>`;
       });
       html += `</div>`;
     }
@@ -745,8 +778,9 @@ async function renderResultados(force){
     PARTIDOS.forEach(p=>{
       const miPred = preds.find(x=>x.cedula===jugador.cedula && x.partido_id===p.id);
       let chip, marcador, tu="";
+      const chipRonda = p.ronda?`<span class="chip-col">🏆 ${p.ronda}</span>`:'';
       if(p.terminado){
-        chip = `<span class="chip-fecha chip-fin">✅ Finalizado</span>`;
+        chip = `${chipRonda}<span class="chip-fecha chip-fin">✅ Finalizado</span>`;
         marcador = `<div class="marcador-real">${p.glReal}</div><div class="vs">-</div><div class="marcador-real">${p.gvReal}</div>`;
         if(miPred){
           const pts = puntosDe(miPred, p);
@@ -755,7 +789,7 @@ async function renderResultados(force){
           else tu=`<div class="tu-line tu-no">❌ No acertaste este partido</div>`;
         }
       }else{
-        chip = `<span class="chip-fecha">📅 ${p.fecha}</span>`;
+        chip = `${chipRonda}<span class="chip-fecha">📅 ${p.fecha}</span>`;
         marcador = `<div class="vs">VS</div>`;
         if(miPred){
           const mk=(miPred.goles_local!=null)?` (${miPred.goles_local}-${miPred.goles_visitante})`:"";
@@ -815,7 +849,7 @@ cargarPartidos();
 /* ===================== TUTORIAL ===================== */
 const TUT_SLIDES = [
   { emoji:"👋", titulo:"¡Bienvenido a la Polla!",
-    texto:"Pronostica los <b>6 partidos del Grupo K</b> donde juega Colombia 🇨🇴 en el Mundial 2026. ¡Demuestra que eres el mejor pronosticador de Combuses!" },
+    texto:"Pronostica los <b>partidos del Grupo K</b> donde juega Colombia 🇨🇴 en el Mundial 2026, y si Colombia avanza, ¡también sus partidos de <b>eliminatorias</b>! Demuestra que eres el mejor pronosticador de Combuses." },
   { emoji:"🪪", titulo:"Entra con tu cédula",
     texto:"Solo los empleados <b>activos</b> pueden participar. Escribe tu número de cédula para identificarte y empezar a jugar." },
   { emoji:"🎯", titulo:"Haz tu pronóstico",
